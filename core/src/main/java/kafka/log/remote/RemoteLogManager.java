@@ -117,6 +117,8 @@ public class RemoteLogManager implements Closeable {
     private static final Logger LOGGER = LoggerFactory.getLogger(RemoteLogManager.class);
     private static final String REMOTE_LOG_READER_THREAD_NAME_PREFIX = "remote-log-reader";
 
+    private static final Set<Uuid> deletedTopicIds = ConcurrentHashMap.newKeySet();
+
     private final RemoteLogManagerConfig rlmConfig;
     private final int brokerId;
     private final String logDir;
@@ -253,6 +255,10 @@ public class RemoteLogManager implements Closeable {
 
     public RemoteStorageManager storageManager() {
         return remoteLogStorageManager;
+    }
+
+    public static void addTopicIdToBeDeleted(Optional<Uuid> uuidOpt) {
+        uuidOpt.ifPresent(deletedTopicIds::add);
     }
 
     private Stream<Partition> filterPartitions(Set<Partition> partitions) {
@@ -554,6 +560,46 @@ public class RemoteLogManager implements Closeable {
             }
         }
 
+        public void cleanupDeletedRemoteLogSegments() {
+            if (isCancelled())
+                return;
+
+            Uuid topicId = topicIdPartition.topicId();
+            if (deletedTopicIds.contains(topicId)) {
+                cleanupAllRemoteLogSegments();
+                cancelRLMtask();
+                deletedTopicIds.remove(topicId);
+            }
+        }
+
+        private void cleanupAllRemoteLogSegments() {
+            if (!isLeader())
+                return;
+
+            RemoteLogSegmentMetadata segmentMetadata = null;
+            try {
+                Iterator<RemoteLogSegmentMetadata> segmentMetadataIter = remoteLogMetadataManager.listRemoteLogSegments(topicIdPartition);
+                while (segmentMetadataIter.hasNext()) {
+                    segmentMetadata = segmentMetadataIter.next();
+                    remoteLogStorageManager.deleteLogSegmentData(segmentMetadata);
+                    logger.info("Delete remote log segment: {} for partition: {}, as the topic is deleted",
+                        segmentMetadata.remoteLogSegmentId(), topicIdPartition);
+                }
+            } catch (RemoteStorageException ex) {
+                logger.error("Fail to delete the remote log segment: {}. Reason: {}", segmentMetadata, ex);
+            }
+        }
+
+        private void cancelRLMtask() {
+            stopPartitions(topicIdPartition.topicPartition(), true);
+            remoteLogMetadataManager.onStopPartitions(Collections.singleton(topicIdPartition));
+            RLMTaskWithFuture rlmTaskWithFuture = leaderOrFollowerTasks.get(topicIdPartition);
+            if (rlmTaskWithFuture != null) {
+                rlmTaskWithFuture.cancel();
+            }
+            leaderOrFollowerTasks.remove(topicIdPartition);
+        }
+
         private long getNextSegmentBaseOffset(long activeSegBaseOffset, ListIterator<LogSegment> logSegmentsIter) {
             long nextSegmentBaseOffset;
             if (logSegmentsIter.hasNext()) {
@@ -612,6 +658,9 @@ public class RemoteLogManager implements Closeable {
 
             try {
                 Optional<UnifiedLog> unifiedLogOptional = fetchLog.apply(topicIdPartition.topicPartition());
+
+                // CleanUp/delete deleted remote log segments
+                cleanupDeletedRemoteLogSegments();
 
                 if (!unifiedLogOptional.isPresent()) {
                     return;
