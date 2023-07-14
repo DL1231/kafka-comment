@@ -212,8 +212,6 @@ class UnifiedLog(@volatile var logStartOffset: Long,
 
   def topicId: Option[Uuid] = _topicId
 
-  def topicIdAsJava: Optional[Uuid] = _topicId.asJava
-
   def dir: File = localLog.dir
 
   def parentDir: String = localLog.parentDir
@@ -1562,6 +1560,10 @@ class UnifiedLog(@volatile var logStartOffset: Long,
         localLog.deleteEmptyDir()
       }
     }
+  }
+
+  def addLogToBeRemoteDeleted(): Unit = {
+    RemoteLogManager.addTopicIdToBeDeleted(_topicId.asJava)
   }
 
   // visible for testing
