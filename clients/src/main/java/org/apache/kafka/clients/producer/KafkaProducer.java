@@ -1048,6 +1048,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                     serializedValue, headers, appendCallbacks, remainingWaitMs, abortOnNewBatch, nowMs, cluster);
             assert appendCallbacks.getPartition() != RecordMetadata.UNKNOWN_PARTITION;
 
+            // 当没有可用batch时，新建一个batch
             if (result.abortForNewBatch) {
                 int prevPartition = partition;
                 onNewBatch(record.topic(), cluster, prevPartition);
@@ -1121,15 +1122,19 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @throws TimeoutException if metadata could not be refreshed within {@code max.block.ms}
      * @throws KafkaException for all Kafka-related exceptions, including the case where this method is called after producer close
      */
+    // 等待metadata的更新
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long nowMs, long maxWaitMs) throws InterruptedException {
-        // add topic to metadata topic list if it is not there already and reset expiry
         Cluster cluster = metadata.fetch();
 
+        // 如果是invalid的topic，直接扔异常
         if (cluster.invalidTopics().contains(topic))
             throw new InvalidTopicException(topic);
 
+        // add topic to metadata topic list if it is not there already and reset expiry
+        // 在 metadata 中添加 topic 后,如果 metadata 中没有这个 topic 的 meta，那么 metadata 的更新标志设置为了 true
         metadata.add(topic, nowMs);
 
+        // 如果 topic 已经存在 meta 中,则返回该 topic 的 partition 数,否则返回 null
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
@@ -1149,9 +1154,12 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                 log.trace("Requesting metadata update for topic {}.", topic);
             }
             metadata.add(topic, nowMs + elapsed);
+            // 返回updateVersion， 每次更新会自增， 并将needUpdate更新为true，如果包含new topic，则是增量更新，否则为全量更新
             int version = metadata.requestUpdateForTopic(topic);
+            // 唤醒 sender， 发送metadata请求，（唤醒NetworkClient线程，执行NetworkClient.poll）
             sender.wakeup();
             try {
+                // 等待 metadata更新
                 metadata.awaitUpdate(version, remainingWaitMs);
             } catch (TimeoutException ex) {
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
@@ -1161,6 +1169,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - nowMs;
+            // 请求超时
             if (elapsed >= maxWaitMs) {
                 throw new TimeoutException(partitionsCount == null ?
                         String.format("Topic %s not present in metadata after %d ms.",
@@ -1168,11 +1177,14 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
                         String.format("Partition %d of topic %s with partition count %d is not present in metadata after %d ms.",
                                 partition, topic, partitionsCount, maxWaitMs));
             }
+            // 认证失败 or invalid topic，直接扔异常
             metadata.maybeThrowExceptionForTopic(topic);
             remainingWaitMs = maxWaitMs - elapsed;
             partitionsCount = cluster.partitionCountForTopic(topic);
+            // 不断循环，直到partitionCount不为null， 即metadata中包含了这个topic
         } while (partitionsCount == null || (partition != null && partition >= partitionsCount));
 
+        // 记录获取metadata的时间
         producerMetrics.recordMetadataWait(time.nanoseconds() - nowNanos);
 
         return new ClusterAndWaitTime(cluster, elapsed);

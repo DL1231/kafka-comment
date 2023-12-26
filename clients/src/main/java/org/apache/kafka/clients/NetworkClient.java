@@ -473,6 +473,7 @@ public class NetworkClient implements KafkaClient {
 
     // package-private for testing
     void sendInternalMetadataRequest(MetadataRequest.Builder builder, String nodeConnectionId, long now) {
+        // 创建 metadata 请求
         ClientRequest clientRequest = newClientRequest(nodeConnectionId, builder, now, true);
         doSend(clientRequest, true, now);
     }
@@ -566,6 +567,20 @@ public class NetworkClient implements KafkaClient {
             return responses;
         }
 
+        // 判断是否需要更新metadata， 如果需要则更新， （请求真正更新metadata的地方）
+        // 客户端刚启动时 sender 线程需要调用三次poll方法，所请求的metadata信息才会得到更新
+        //  1、sender第一次poll， 初始化与node的连接；
+        //  2、sender第二次poll， 发送metadata请求
+        //  3、sender第三次poll， 获取metadataResponse， 更新metadata
+
+        // Metadata 在两种情况下会进行更新：
+        //  1、过期周期性更新（第一次发送消息，强制更新）
+        //  2、强制更新（调用requestUpdate()， 将needUpdate置为true来进行强制更新。）
+        // 强制更新的几种情况：
+        //  1、handleDisconnections(), 处理连接断开的情况，会触发强制更新；
+        //  2、handleTimedOutRequests(), 处理请求超时的情况
+        //  3、发送请求时，无法找到partition的leader
+        //  4、处理Producer响应，handleProduceResponse，返回关于metadata过期的异常，比如没有tp相关的meta或者client没有权限则获取其metadata。
         long metadataTimeout = metadataUpdater.maybeUpdate(now);
         try {
             this.selector.poll(Utils.min(timeout, metadataTimeout, defaultRequestTimeoutMs));
@@ -921,11 +936,13 @@ public class NetworkClient implements KafkaClient {
 
             // If the received response includes a throttle delay, throttle the connection.
             maybeThrottle(response, req.header.apiVersion(), req.destination, now);
+            // 如果是 metadata 响应
             if (req.isInternalRequest && response instanceof MetadataResponse)
                 metadataUpdater.handleSuccessfulResponse(req.header, now, (MetadataResponse) response);
             else if (req.isInternalRequest && response instanceof ApiVersionsResponse)
                 handleApiVersionsResponse(responses, req, now, (ApiVersionsResponse) response);
             else
+                // 如果是其他请求的响应
                 responses.add(req.completed(response, now));
         }
     }
@@ -1072,16 +1089,20 @@ public class NetworkClient implements KafkaClient {
         @Override
         public long maybeUpdate(long now) {
             // should we update our metadata?
+            // metadata 下次更新的时间， 判断是强制更新还是过期更新，前者为立刻更新，后者计算metadata的过期时间。
             long timeToNextMetadataUpdate = metadata.timeToNextUpdate(now);
+            // 如果一条 metadata 的 fetch 请求还未从 server 收到回复,那么时间设置为 waitForMetadataFetch（默认30s）
             long waitForMetadataFetch = hasFetchInProgress() ? defaultRequestTimeoutMs : 0;
 
             long metadataTimeout = Math.max(timeToNextMetadataUpdate, waitForMetadataFetch);
+            // 如果还不应该发送metadata请求，则直接返回下次应该更新的时间
             if (metadataTimeout > 0) {
                 return metadataTimeout;
             }
 
             // Beware that the behavior of this method and the computation of timeouts for poll() are
             // highly dependent on the behavior of leastLoadedNode.
+            // 选择一个连接数最小的节点
             Node node = leastLoadedNode(now);
             if (node == null) {
                 log.debug("Give up sending metadata request since no node is available");
@@ -1150,6 +1171,7 @@ public class NetworkClient implements KafkaClient {
                 log.trace("Ignoring empty metadata response with correlation id {}.", requestHeader.correlationId());
                 this.metadata.failedUpdate(now);
             } else {
+                // 更新metadata 信息
                 this.metadata.update(inProgress.requestVersion, response, inProgress.isPartialUpdate, now);
             }
 
@@ -1176,14 +1198,21 @@ public class NetworkClient implements KafkaClient {
         /**
          * Add a metadata request to the list of sends if we can make one
          */
+        // 如果 node 可以发送请求，则直接发送请求；
+        // 如果该 node 正在建立连接，则直接返回；
+        // 如果该 node 还没建立连接，则向 broker 初始化链接。
         private long maybeUpdate(long now, Node node) {
             String nodeConnectionId = node.idString();
 
+            // 判断是否可以发送请求，通道已经ready，且支持发送更多的请求
             if (canSendRequest(nodeConnectionId, now)) {
+                // 得到 metadata 请求，分为部分更新 和 全部更新两种。
                 Metadata.MetadataRequestAndVersion requestAndVersion = metadata.newMetadataRequestAndVersion(now);
                 MetadataRequest.Builder metadataRequest = requestAndVersion.requestBuilder;
                 log.debug("Sending metadata request {} to node {}", metadataRequest, node);
+                // 发送metadata请求
                 sendInternalMetadataRequest(metadataRequest, nodeConnectionId, now);
+                // 减少发送metadata的开销，如果已经有inProgress了，后续就不用再发了。
                 inProgress = new InProgressData(requestAndVersion.requestVersion, requestAndVersion.isPartialUpdate);
                 return defaultRequestTimeoutMs;
             }
@@ -1191,6 +1220,7 @@ public class NetworkClient implements KafkaClient {
             // If there's any connection establishment underway, wait until it completes. This prevents
             // the client from unnecessarily connecting to additional nodes while a previous connection
             // attempt has not been completed.
+            // 如果 client 正在与任何一个 node 的连接状态是 connecting,那么就进行等待
             if (isAnyNodeConnecting()) {
                 // Strictly the timeout we should return here is "connect timeout", but as we don't
                 // have such application level configuration, using reconnect backoff instead.
@@ -1200,6 +1230,7 @@ public class NetworkClient implements KafkaClient {
             if (connectionStates.canConnect(nodeConnectionId, now)) {
                 // We don't have a connection to this node right now, make one
                 log.debug("Initialize connection to node {} for sending metadata request", node);
+                // 初始化连接
                 initiateConnect(node, now);
                 return reconnectBackoffMs;
             }

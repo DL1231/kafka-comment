@@ -52,6 +52,10 @@ public class MetadataCache {
     private final Map<TopicPartition, PartitionMetadata> metadataByPartition;
     private final Map<String, Uuid> topicIds;
 
+    // Cluster主要保存的是:
+    // 1、broker.id 与node的对应关系
+    // 2、topic 与 partition （PartitionInfo）的对应关系；
+    // 3、node 与 partition （PartitionInfo）的对应关系。
     private Cluster clusterInstance;
 
     MetadataCache(String clusterId,

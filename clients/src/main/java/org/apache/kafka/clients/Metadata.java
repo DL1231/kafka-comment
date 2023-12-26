@@ -60,21 +60,21 @@ import static org.apache.kafka.common.record.RecordBatch.NO_PARTITION_LEADER_EPO
  */
 public class Metadata implements Closeable {
     private final Logger log;
-    private final long refreshBackoffMs;
-    private final long metadataExpireMs;
-    private int updateVersion;  // bumped on every metadata response
+    private final long refreshBackoffMs; // 为避免频繁更新metadata，当metadata更新失败后，回退时间，默认100ms
+    private final long metadataExpireMs; // metadata过期时间，默认60,000ms
+    private int updateVersion;  // bumped on every metadata response, 每成功收到metadata 更新response，自增1，由于判断metadata是否更新
     private int requestVersion; // bumped on every new topic addition
-    private long lastRefreshMs;
-    private long lastSuccessfulRefreshMs;
-    private KafkaException fatalException;
-    private Set<String> invalidTopics;
-    private Set<String> unauthorizedTopics;
-    private MetadataCache cache = MetadataCache.empty();
+    private long lastRefreshMs; // 最近一次更新的时间，包括更新失败的情况
+    private long lastSuccessfulRefreshMs;  // 最近一次成功更新的时间（如果每次都成功的话，与前面的值相等,
+    private KafkaException fatalException;  //当fatal 异常存在时，生产者便放弃等待metadata更新
+    private Set<String> invalidTopics;  // 失效的topic
+    private Set<String> unauthorizedTopics; //未认证的topic，与上面一样，都是不可重试异常， 如果请求更新的topic在该集合中，直接扔异常
+    private MetadataCache cache = MetadataCache.empty();    // 集中缓存一些topic的信息
     private boolean needFullUpdate;
     private boolean needPartialUpdate;
-    private final ClusterResourceListeners clusterResourceListeners;
+    private final ClusterResourceListeners clusterResourceListeners;    //当接收到 metadata 更新时, ClusterResourceListeners的列表
     private boolean isClosed;
-    private final Map<TopicPartition, Integer> lastSeenLeaderEpochs;
+    private final Map<TopicPartition, Integer> lastSeenLeaderEpochs;    // Track leader epochs
 
     /**
      * Create a new Metadata instance
@@ -349,6 +349,7 @@ public class Metadata implements Closeable {
                 for (MetadataResponse.PartitionMetadata partitionMetadata : metadata.partitionMetadata()) {
                     // Even if the partition's metadata includes an error, we need to handle
                     // the update to catch new epochs
+                    // 更新 metadata
                     updateLatestMetadata(partitionMetadata, metadataResponse.hasReliableLeaderEpochs(), topicId, oldTopicId)
                         .ifPresent(partitions::add);
 
