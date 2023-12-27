@@ -297,6 +297,7 @@ public class RecordAccumulator {
                 // deque lock.
                 final BuiltInPartitioner.StickyPartitionInfo partitionInfo;
                 final int effectivePartition;
+                // 获取本次要append的分区，如果为unknown，则以sticky的方式写入
                 if (partition == RecordMetadata.UNKNOWN_PARTITION) {
                     partitionInfo = topicInfo.builtInPartitioner.peekCurrentPartitionInfo(cluster);
                     effectivePartition = partitionInfo.partition();
@@ -310,6 +311,7 @@ public class RecordAccumulator {
 
                 // check if we have an in-progress batch
                 Deque<ProducerBatch> dq = topicInfo.batches.computeIfAbsent(effectivePartition, k -> new ArrayDeque<>());
+                // 在对一个 queue 进行操作时,会保证线程安全
                 synchronized (dq) {
                     // After taking the lock, validate that the partition hasn't changed and retry.
                     if (partitionChanged(topic, topicInfo, partitionInfo, dq, nowMs, cluster))
@@ -319,6 +321,7 @@ public class RecordAccumulator {
                     if (appendResult != null) {
                         // If queue has incomplete batches we disable switch (see comments in updatePartitionInfo).
                         boolean enableSwitch = allBatchesFull(dq);
+                        // 是否需要更新分区
                         topicInfo.builtInPartitioner.updatePartitionInfo(partitionInfo, appendResult.appendedBytes, cluster, enableSwitch);
                         return appendResult;
                     }
@@ -332,9 +335,11 @@ public class RecordAccumulator {
 
                 if (buffer == null) {
                     byte maxUsableMagic = apiVersions.maxUsableProduceMagic();
+                    // 为 该tp创建一个新的RecordBatch， 需初始化相应的RecordBatch，为其分配的大小为...
                     int size = Math.max(this.batchSize, AbstractRecords.estimateSizeInBytesUpperBound(maxUsableMagic, compression, key, value, headers));
                     log.trace("Allocating a new {} byte message buffer for topic {} partition {} with remaining timeout {}ms", size, topic, partition, maxTimeToBlock);
                     // This call may block if we exhausted buffer space.
+                    // 申请内存，初始化buffer
                     buffer = free.allocate(size, maxTimeToBlock);
                     // Update the current time in case the buffer allocation blocked above.
                     // NOTE: getting time may be expensive, so calling it under a lock

@@ -1403,6 +1403,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * can be used (the partition is then calculated by built-in
      * partitioning logic).
      */
+    // 指定了partition or 没指定partition但是指定了partitioner or 没指定partition 也没指定partitioner 但是指定了key or 都没指定，返回UNKNOWN_PARTITION
     private int partition(ProducerRecord<K, V> record, byte[] serializedKey, byte[] serializedValue, Cluster cluster) {
         if (record.partition() != null)
             return record.partition();

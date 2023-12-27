@@ -331,6 +331,7 @@ public class Sender implements Runnable {
 
         long currentTimeMs = time.milliseconds();
         long pollTimeout = sendProducerData(currentTimeMs);
+        // 对 socket 的一些实际的读写操作
         client.poll(pollTimeout, currentTimeMs);
     }
 
@@ -386,17 +387,20 @@ public class Sender implements Runnable {
         }
 
         // create produce requests
+        // 返回该 node 对应的所有可以发送的 RecordBatch 组成的 batches（key 是 node.id）,并将 RecordBatch 从对应的 queue 中移除
         Map<Integer, List<ProducerBatch>> batches = this.accumulator.drain(cluster, result.readyNodes, this.maxRequestSize, now);
         addToInflightBatches(batches);
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
             for (List<ProducerBatch> batchList : batches.values()) {
                 for (ProducerBatch batch : batchList)
+                    // 将这些Batch对应的tp mute掉
                     this.accumulator.mutePartition(batch.topicPartition);
             }
         }
 
         accumulator.resetNextBatchExpiryTime();
+        // 处理超时的batch
         List<ProducerBatch> expiredInflightBatches = getExpiredInflightBatches(now);
         List<ProducerBatch> expiredBatches = this.accumulator.expiredBatches(now);
         expiredBatches.addAll(expiredInflightBatches);
@@ -433,6 +437,7 @@ public class Sender implements Runnable {
             // otherwise the select time will be the time difference between now and the metadata expiry time;
             pollTimeout = 0;
         }
+        // 发送 RecordBatch
         sendProduceRequests(batches, now);
         return pollTimeout;
     }
@@ -819,6 +824,7 @@ public class Sender implements Runnable {
     /**
      * Create a produce request from the given record batches
      */
+    // 将batches中leader为同一个node的所有RecordBatch放在一个请求中发送。
     private void sendProduceRequest(long now, int destination, short acks, int timeout, List<ProducerBatch> batches) {
         if (batches.isEmpty())
             return;
@@ -844,6 +850,7 @@ public class Sender implements Runnable {
             // not all support the same message format version. For example, if a partition migrates from a broker
             // which is supporting the new magic version to one which doesn't, then we will need to convert.
             if (!records.hasMatchingMagic(minUsedMagic))
+                // downcovert
                 records = batch.records().downConvert(minUsedMagic, 0, time).records();
             ProduceRequestData.TopicProduceData tpData = tpd.find(tp.topic());
             if (tpData == null) {
