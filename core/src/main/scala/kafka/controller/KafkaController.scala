@@ -695,8 +695,11 @@ class KafkaController(val config: KafkaConfig,
    */
   private def onNewPartitionCreation(newPartitions: Set[TopicPartition]): Unit = {
     info(s"New partition creation callback for ${newPartitions.mkString(",")}")
+    // 将待创建的分区状态流转为 NewPartition
     partitionStateMachine.handleStateChanges(newPartitions.toSeq, NewPartition)
+    // 将待创建的副本状态流转为 NewReplica
     replicaStateMachine.handleStateChanges(controllerContext.replicasForPartition(newPartitions).toSeq, NewReplica)
+    // 将分区状态从刚的 NewPartition 流转为 OnlinePartition
     partitionStateMachine.handleStateChanges(
       newPartitions.toSeq,
       OnlinePartition,
@@ -1675,9 +1678,13 @@ class KafkaController(val config: KafkaConfig,
     }
   }
 
+  // 监听/brokers/topics/{topicName}
   private def processTopicChange(): Unit = {
+    // 如果不是controller角色， 直接返回
     if (!isActive) return
+    // 从 zk 中获取 /brokers/topics 所有的topic
     val topics = zkClient.getAllTopicsInCluster(true)
+    // 找出哪些是新增的
     val newTopics = topics -- controllerContext.allTopics
     val deletedTopics = controllerContext.allTopics.diff(topics)
     controllerContext.setAllTopics(topics)
@@ -1694,6 +1701,7 @@ class KafkaController(val config: KafkaConfig,
     }
     info(s"New topics: [$newTopics], deleted topics: [$deletedTopics], new partition replica assignment " +
       s"[$addedPartitionReplicaAssignment]")
+    // 新建topic
     if (addedPartitionReplicaAssignment.nonEmpty) {
       val partitionAssignments = addedPartitionReplicaAssignment
         .map { case TopicIdReplicaAssignment(_, _, partitionsReplicas) => partitionsReplicas.keySet }

@@ -164,9 +164,11 @@ class ZkAdminManager(val config: KafkaConfig,
     val brokers = metadataCache.getAliveBrokers()
     val metadata = toCreate.values.map(topic =>
       try {
+        // 如果要创建的topic已经存在，扔异常
         if (metadataCache.contains(topic.name))
           throw new TopicExistsException(s"Topic '${topic.name}' already exists.")
 
+        // 如果存在配置项为null，扔异常
         val nullConfigs = topic.configs.asScala.filter(_.value == null).map(_.name)
         if (nullConfigs.nonEmpty)
           throw new InvalidConfigurationException(s"Null value not supported for topic configs: ${nullConfigs.mkString(",")}")
@@ -182,6 +184,7 @@ class ZkAdminManager(val config: KafkaConfig,
         val resolvedReplicationFactor = if (topic.replicationFactor == NO_REPLICATION_FACTOR)
           defaultReplicationFactor else topic.replicationFactor
 
+        // 生成 topic 副本分配方案
         val assignments = if (topic.assignments.isEmpty) {
           AdminUtils.assignReplicasToBrokers(
             brokers, resolvedNumPartitions, resolvedReplicationFactor)
@@ -198,6 +201,7 @@ class ZkAdminManager(val config: KafkaConfig,
 
         val configs = new Properties()
         topic.configs.forEach(entry => configs.setProperty(entry.name, entry.value))
+        // 校验创建topic的参数
         adminZkClient.validateTopicCreate(topic.name, assignments, configs)
         validateTopicCreatePolicy(topic, resolvedNumPartitions, resolvedReplicationFactor, assignments)
 

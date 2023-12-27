@@ -227,6 +227,10 @@ class ZkPartitionStateMachine(config: KafkaConfig,
       case OnlinePartition =>
         val uninitializedPartitions = validPartitions.filter(partition => partitionState(partition) == NewPartition)
         val partitionsToElectLeader = validPartitions.filter(partition => partitionState(partition) == OfflinePartition || partitionState(partition) == OnlinePartition)
+        // 为新建的topic 初始化leaderAndIsr
+        //  1、向 zk 中写入 /brokers/topics/{topicName}/partitions/ 持久节点，无数据；
+        //  2、向 zk 中写入 /brokers/topics/{topicName}/partitions/{分区号} 持久节点，无数据；
+        //  3、向 zk 中写入 /brokers/topics/{topicName}/partitions/{分区号}/state 持久节点，数据为 leaderIsrAndControllerEpoch；
         if (uninitializedPartitions.nonEmpty) {
           val successfulInitializations = initializeLeaderAndIsrForPartitions(uninitializedPartitions)
           successfulInitializations.foreach { partition =>

@@ -125,6 +125,7 @@ class ControllerEventManager(controllerId: Int,
 
     logIdent = logPrefix
 
+    // controller 的事件 监听逻辑
     override def doWork(): Unit = {
       val dequeued = pollFromEventQueue()
       dequeued.event match {
